@@ -193,7 +193,7 @@ if ($list.Count -gt 0) {
     $list
 }
 
-if ($list.Count -eq 0 -and (get_config ALLOWPUBLICBUCKETDISCOVERY $true) -and !(github_ratelimit_reached)) {
+if ($list.Count -eq 0 -and (Test-PublicBucketDiscoveryAllowed) -and !(github_ratelimit_reached)) {
     $remote_results = search_remotes $query
     if (!$remote_results) {
         warn 'No matches found.'

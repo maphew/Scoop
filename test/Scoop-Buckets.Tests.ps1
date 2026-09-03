@@ -28,9 +28,17 @@ Describe 'Managed catalogs' -Tag 'Scoop' {
         Test-BucketAllowed 'public' | Should -BeTrue
     }
 
+    It 'allows all buckets when the allowlist is empty' {
+        $scoopConfig = [PSCustomObject]@{ allowedBuckets = @() }
+
+        Test-ManagedCatalogEnabled | Should -BeFalse
+        Test-BucketAllowed 'public' | Should -BeTrue
+    }
+
     It 'only lists allowed local buckets' {
         $scoopConfig = [PSCustomObject]@{ allowedBuckets = @('ENV') }
 
+        Test-ManagedCatalogEnabled | Should -BeTrue
         @(Get-LocalBucket) | Should -Be @('ENV')
         Test-BucketAllowed 'ENV' | Should -BeTrue
         Test-BucketAllowed 'public' | Should -BeFalse
@@ -57,6 +65,23 @@ Describe 'Managed catalogs' -Tag 'Scoop' {
         add_bucket 'ENV' 'https://example.test/env.git' | Should -Be 3
         rm_bucket 'ENV' | Should -Be 3
         $envBucket | Should -Exist
+    }
+
+    It 'fails closed when the bucket change setting is not a boolean' {
+        $scoopConfig = [PSCustomObject]@{
+            allowedBuckets     = @('ENV')
+            allowBucketChanges = 'false'
+        }
+
+        add_bucket 'ENV' 'https://example.test/env.git' | Should -Be 3
+        rm_bucket 'ENV' | Should -Be 3
+        $envBucket | Should -Exist
+    }
+
+    It 'fails closed when the public discovery setting is not a boolean' {
+        $scoopConfig = [PSCustomObject]@{ allowPublicBucketDiscovery = 'true' }
+
+        Test-PublicBucketDiscoveryAllowed | Should -BeFalse
     }
 
     It 'blocks adding a bucket outside the allowlist' {
@@ -104,5 +129,20 @@ Describe 'Managed catalogs' -Tag 'Scoop' {
         $url | Should -Be 'https://example.test/qgis.json'
         $localManifest | Should -BeNullOrEmpty
         $localPath | Should -Be (Join-Path $publicBucket 'qgis.json')
+    }
+
+    It 'blocks update manifest lookup for disallowed sources' {
+        $scoopConfig = [PSCustomObject]@{ allowedBuckets = @('ENV') }
+        Mock url_manifest { throw 'url_manifest should not be called' }
+
+        manifest 'qgis' 'public' | Should -BeNullOrEmpty
+        manifest 'qgis' $null 'https://example.test/qgis.json' | Should -BeNullOrEmpty
+        Should -Invoke url_manifest -Times 0
+    }
+
+    It 'allows update manifest lookup from an allowed bucket' {
+        $scoopConfig = [PSCustomObject]@{ allowedBuckets = @('ENV') }
+
+        (manifest 'qgis' 'ENV').version | Should -Be '1.0'
     }
 }

@@ -61,7 +61,11 @@ switch ($cmd) {
     'list' {
         $buckets = list_buckets
         if (!$buckets.Length) {
-            warn "No bucket found. Please run 'scoop bucket add main' to add the default 'main' bucket."
+            $defaultBucket = get_config DEFAULTBUCKET 'main'
+            warn 'No bucket found.'
+            if (Test-BucketChangeAllowed) {
+                Write-Host "Please run 'scoop bucket add $defaultBucket <repo>' to add the default '$defaultBucket' bucket."
+            }
             exit 2
         } else {
             $buckets
@@ -69,7 +73,7 @@ switch ($cmd) {
         }
     }
     'known' {
-        if (!(get_config ALLOWPUBLICBUCKETDISCOVERY $true)) {
+        if (!(Test-PublicBucketDiscoveryAllowed)) {
             warn 'Public bucket discovery is disabled by managed catalog configuration.'
             exit 1
         }

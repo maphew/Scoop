@@ -158,7 +158,7 @@ function Sync-Bucket {
     )
     Write-Host 'Updating Buckets...'
 
-    if ((get_config ALLOWBUCKETCHANGES $true) -and (Test-BucketAllowed 'main') -and !(Test-Path (Join-Path (Find-BucketDirectory 'main' -Root) '.git'))) {
+    if ((Test-BucketChangeAllowed) -and (Test-BucketAllowed 'main') -and !(Test-Path (Join-Path (Find-BucketDirectory 'main' -Root) '.git'))) {
         info "Converting 'main' bucket to git repo..."
         $status = rm_bucket 'main'
         if ($status -ne 0) {

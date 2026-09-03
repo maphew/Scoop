@@ -57,9 +57,23 @@ function Get-AllowedBucket {
     @(get_config ALLOWEDBUCKETS) | Where-Object { ![String]::IsNullOrWhiteSpace($_) }
 }
 
+function Test-ManagedCatalogEnabled {
+    return @(Get-AllowedBucket).Length -gt 0
+}
+
 function Test-BucketAllowed($Name) {
     $allowedBuckets = @(Get-AllowedBucket)
     return !$allowedBuckets.Length -or $Name -in $allowedBuckets
+}
+
+function Test-BucketChangeAllowed {
+    $setting = get_config ALLOWBUCKETCHANGES $true
+    return $setting -is [bool] -and $setting
+}
+
+function Test-PublicBucketDiscoveryAllowed {
+    $setting = get_config ALLOWPUBLICBUCKETDISCOVERY $true
+    return $setting -is [bool] -and $setting
 }
 
 function apps_in_bucket($dir) {
@@ -142,7 +156,7 @@ function list_buckets {
 }
 
 function add_bucket($name, $repo) {
-    if (!(get_config ALLOWBUCKETCHANGES $true)) {
+    if (!(Test-BucketChangeAllowed)) {
         error 'Bucket changes are disabled by managed catalog configuration.'
         return 3
     }
@@ -199,7 +213,7 @@ function add_bucket($name, $repo) {
 }
 
 function rm_bucket($name) {
-    if (!(get_config ALLOWBUCKETCHANGES $true)) {
+    if (!(Test-BucketChangeAllowed)) {
         error 'Bucket changes are disabled by managed catalog configuration.'
         return 3
     }

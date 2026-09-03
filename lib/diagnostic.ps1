@@ -30,7 +30,7 @@ function check_main_bucket {
     $defaultBucket = get_config DEFAULTBUCKET 'main'
     if ((Get-LocalBucket) -notcontains $defaultBucket) {
         warn "Default bucket '$defaultBucket' is not added."
-        if (get_config ALLOWBUCKETCHANGES $true) {
+        if (Test-BucketChangeAllowed) {
             Write-Host "  run 'scoop bucket add $defaultBucket <repo>'"
         }
 

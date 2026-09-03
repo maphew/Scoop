@@ -31,6 +31,22 @@ function url_manifest($url) {
     }
 }
 
+function Test-ManifestSourceAllowed($Bucket, $Url) {
+    if (!(Test-ManagedCatalogEnabled)) {
+        return $true
+    }
+    if ($Url) {
+        warn 'Standalone manifests are disabled by managed catalog configuration.'
+        return $false
+    }
+    $bucketName = if ($Bucket) { $Bucket } else { 'main' }
+    if (!(Test-BucketAllowed $bucketName)) {
+        warn "Bucket '$bucketName' is not allowed by managed catalog configuration."
+        return $false
+    }
+    return $true
+}
+
 function Get-Manifest($app) {
     $bucket, $manifest, $url = $null
     $app = $app.TrimStart('/')
@@ -38,9 +54,7 @@ function Get-Manifest($app) {
     if ($app -match '^(ht|f)tps?://|\\\\') {
         $url = $app
         $app = appname_from_url $url
-        if (@(Get-AllowedBucket).Length) {
-            warn 'Standalone manifests are disabled by managed catalog configuration.'
-        } else {
+        if (Test-ManifestSourceAllowed -Url $url) {
             $manifest = url_manifest $url
         }
     } else {
@@ -58,9 +72,7 @@ function Get-Manifest($app) {
                 $bucket = $install_info.bucket
                 if (!$bucket) {
                     $url = $install_info.url
-                    if (@(Get-AllowedBucket).Length) {
-                        warn 'Standalone manifests are disabled by managed catalog configuration.'
-                    } else {
+                    if (Test-ManifestSourceAllowed -Bucket $bucket -Url $url) {
                         if ($url -match '^(ht|f)tps?://|\\\\') {
                             $manifest = url_manifest $url
                         }
@@ -111,9 +123,7 @@ function Get-Manifest($app) {
                 if (Test-Path $app) {
                     $url = Convert-Path $app
                     $app = appname_from_url $url
-                    if (@(Get-AllowedBucket).Length) {
-                        warn 'Standalone manifests are disabled by managed catalog configuration.'
-                    } else {
+                    if (Test-ManifestSourceAllowed -Url $url) {
                         $manifest = parse_json $url
                     }
                 } else {
@@ -132,6 +142,7 @@ function Get-Manifest($app) {
 }
 
 function manifest($app, $bucket, $url) {
+    if (!(Test-ManifestSourceAllowed -Bucket $bucket -Url $url)) { return $null }
     if ($url) { return url_manifest $url }
     parse_json (manifest_path $app $bucket)
 }
