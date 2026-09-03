@@ -504,3 +504,55 @@ function Remove-ScoopDBItem {
         }
     }
 }
+
+<#
+.SYNOPSIS
+    List the buckets that have rows in the Scoop SQLite database.
+.OUTPUTS
+    System.String[]
+#>
+function Get-ScoopDBBucket {
+    $db = Open-ScoopDB
+    $dbCommand = $db.CreateCommand()
+    $dbCommand.CommandText = 'SELECT DISTINCT bucket FROM app'
+    $dbCommand.CommandType = [System.Data.CommandType]::Text
+    $result = [System.Collections.Generic.List[string]]::new()
+    try {
+        $reader = $dbCommand.ExecuteReader()
+        while ($reader.Read()) { $result.Add($reader.GetString(0)) }
+        $reader.Dispose()
+    } finally {
+        $dbCommand.Dispose()
+        $db.Dispose()
+    }
+    return @($result)
+}
+
+<#
+.SYNOPSIS
+    Reconcile the Scoop SQLite database with the buckets Scoop may currently use.
+.DESCRIPTION
+    Rows for buckets that are no longer local or no longer allowed by managed
+    catalog configuration are removed, and allowed local buckets that have no
+    rows are indexed. Runs after the allowlist changes and on every bucket sync,
+    so a hand-edited config.json is picked up by the next `scoop update`.
+.OUTPUTS
+    System.Boolean
+    True when the database was changed.
+#>
+function Sync-ScoopDB {
+    $cached = @(Get-ScoopDBBucket)
+    $local = @(Get-LocalBucket)
+    $stale = @($cached | Where-Object { $_ -notin $local })
+    $missing = @($local | Where-Object { $_ -notin $cached })
+    if (!$stale.Length -and !$missing.Length) { return $false }
+    info 'Updating cache...'
+    foreach ($bucket in $stale) {
+        Remove-ScoopDBItem -Bucket $bucket
+    }
+    if ($missing.Length) {
+        $manifests = @(Get-ChildItem ($missing | ForEach-Object { Find-BucketDirectory $_ }) -Filter '*.json' -Recurse).FullName
+        if ($manifests) { Set-ScoopDB -Path $manifests }
+    }
+    return $true
+}

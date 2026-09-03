@@ -1,4 +1,5 @@
 $bucketsdir = "$scoopdir\buckets"
+$bucketOriginCache = @{} # bucket root -> normalised remote.origin.url, filled by Get-BucketOrigin
 
 function Find-BucketDirectory {
     <#
@@ -49,35 +50,124 @@ function known_buckets {
     known_bucket_repos | ForEach-Object { $_.PSObject.Properties | Select-Object -Expand 'name' }
 }
 
-function Get-AllowedBucket {
+# ---------------------------------------------------------------------------
+# Managed catalogs (ScoopInstaller/Scoop#6729)
+#
+# Scope. The allowedBuckets, allowBucketChanges, allowPublicBucketDiscovery and
+# defaultBucket settings let an administrator restrict *new* installations to an
+# approved set of buckets. They are policy, not a security boundary: anything
+# Scoop reads from a user-writable directory (config.json, buckets\, workspace\)
+# can be forged by that user, and $env:SCOOP can point Scoop at another root.
+#
+# Decisions that shape the code below:
+# - Off by default. An absent or empty allowlist changes no behaviour.
+# - Names are matched against bucket directory names. A name may be pinned to a
+#   repository ("ENV": "https://..." in JSON, or ENV=https://... on the CLI); a
+#   local clone must then have that origin and add_bucket refuses any other
+#   repository. This stops accidental rebinding, not a determined user.
+# - Boolean flags fail closed: only a real JSON true enables them.
+# - Read-only commands keep working on apps installed before the policy from a
+#   source that is now rejected; they fall back to the installed manifest and
+#   are reported as blocked, never re-fetched or updated.
+# - Local manifest paths are trusted only inside an allowed bucket or the
+#   workspace directory, which is where Scoop writes generated manifests.
+# - rm_bucket is gated by allowBucketChanges only, so a stale bucket outside
+#   the allowlist can always be removed.
+# - The SQLite cache is reconciled with the allowlist by set_config and
+#   Sync-Bucket (see Sync-ScoopDB), because search and history read from it.
+#
+# To make this enforceable, policy and trusted content must both live where the
+# user cannot write. The winget-style shape would be:
+#   1. read these settings from HKLM\SOFTWARE\Policies\Scoop (Group Policy,
+#      administrators only) with precedence over config.json and $env:SCOOP;
+#   2. clone allowed buckets under the global directory (ProgramData\scoop),
+#      updated by an administrator task, with user `scoop update` skipping them.
+# Neither is implemented; both need maintainer agreement on the policy source.
+# ---------------------------------------------------------------------------
+
+function Get-AllowedBucketEntry {
     <#
     .SYNOPSIS
-        List buckets allowed by managed catalog configuration.
+        Parse the allowedBuckets setting into @{ Name; Repo } entries.
     .DESCRIPTION
-        Accepts a JSON array of names or a comma-separated string (the only form
+        Accepts a JSON object (name -> repository URL), a JSON array of names, or a
+        comma-separated string of `name` or `name=repo` items (the only form
         `scoop config` can write). Non-string values are ignored. Returns an empty
         array when the setting is absent, which means no managed catalog is active.
     #>
     $configured = get_config ALLOWEDBUCKETS
     if ($null -eq $configured) { return @() }
-    $names = foreach ($entry in @($configured)) {
-        if ($entry -is [string]) {
-            foreach ($name in $entry.Split(',')) {
-                $name = $name.Trim()
-                if ($name) { $name }
-            }
+    $entries = [System.Collections.Generic.List[hashtable]]::new()
+    if ($configured -is [System.Management.Automation.PSCustomObject]) {
+        foreach ($property in $configured.PSObject.Properties) {
+            $name = $property.Name.Trim()
+            $repo = if ($property.Value -is [string]) { $property.Value.Trim() }
+            if ($name) { $entries.Add(@{ Name = $name; Repo = $repo }) }
+        }
+        return @($entries)
+    }
+    foreach ($value in @($configured)) {
+        if ($value -isnot [string]) { continue }
+        foreach ($item in $value.Split(',')) {
+            $name, $repo = $item.Split('=', 2)
+            $name = $name.Trim()
+            $repo = if ($repo) { $repo.Trim() }
+            if ($name) { $entries.Add(@{ Name = $name; Repo = $repo }) }
         }
     }
-    return @($names)
+    return @($entries)
+}
+
+function Get-AllowedBucket {
+    <#
+    .SYNOPSIS
+        List bucket names allowed by managed catalog configuration.
+    #>
+    return @(Get-AllowedBucketEntry | ForEach-Object { $_.Name })
+}
+
+function Get-AllowedBucketRepo($Name) {
+    <#
+    .SYNOPSIS
+        Repository URL the allowlist pins the bucket to, or $null when only the name is listed.
+    #>
+    $entry = Get-AllowedBucketEntry | Where-Object { $_.Name -ieq $Name } | Select-Object -First 1
+    if ($entry -and $entry.Repo) { return $entry.Repo }
+    return $null
+}
+
+function Get-BucketOrigin($Name) {
+    <#
+    .SYNOPSIS
+        Normalised remote.origin.url of a local bucket clone, cached per process.
+        $null when the bucket is not a git repository or git is unavailable.
+    #>
+    $dir = Find-BucketDirectory $Name -Root
+    if ($bucketOriginCache.ContainsKey($dir)) { return $bucketOriginCache[$dir] }
+    $origin = $null
+    if ((Test-Path (Join-Path $dir '.git')) -and (Test-GitAvailable)) {
+        $remote = Invoke-Git -Path $dir -ArgumentList @('config', '--get', 'remote.origin.url')
+        if ($remote) { $origin = Convert-RepositoryUri -Uri "$remote" }
+    }
+    $bucketOriginCache[$dir] = $origin
+    return $origin
 }
 
 function Test-ManagedCatalogEnabled {
-    return @(Get-AllowedBucket).Length -gt 0
+    return @(Get-AllowedBucketEntry).Length -gt 0
 }
 
 function Test-BucketAllowed($Name) {
-    $allowedBuckets = @(Get-AllowedBucket)
-    return !$allowedBuckets.Length -or $Name -in $allowedBuckets
+    $entries = @(Get-AllowedBucketEntry)
+    if (!$entries.Length) { return $true }
+    $entry = $entries | Where-Object { $_.Name -ieq $Name } | Select-Object -First 1
+    if (!$entry) { return $false }
+    if (!$entry.Repo) { return $true }
+    # The name is pinned to a repository. A clone on disk must have that origin;
+    # a bucket not on disk yet passes here and add_bucket verifies the repository.
+    if (!(Test-Path (Find-BucketDirectory $Name -Root))) { return $true }
+    $required = Convert-RepositoryUri -Uri $entry.Repo
+    return [bool]$required -and (Get-BucketOrigin $Name) -eq $required
 }
 
 function Get-DefaultBucket {
@@ -120,10 +210,10 @@ function Get-LocalBucket {
     .SYNOPSIS
         List all local buckets.
     #>
-    $allowedBuckets = @(Get-AllowedBucket)
+    $managed = Test-ManagedCatalogEnabled
     $bucketNames = [System.Collections.Generic.List[String]]@(
         (Get-ChildItem -Path $bucketsdir -Directory).Name |
-            Where-Object { $_ -and (!$allowedBuckets.Length -or $_ -in $allowedBuckets) }
+            Where-Object { $_ -and (!$managed -or (Test-BucketAllowed $_)) }
     )
     if ($bucketNames.Count -eq 0) {
         return @() # Return a zero-length list instead of $null.
@@ -215,6 +305,11 @@ function add_bucket($name, $repo) {
     if ($null -eq $uni_repo) {
         return 1
     }
+    $requiredRepo = Get-AllowedBucketRepo $name
+    if ($requiredRepo -and (Convert-RepositoryUri -Uri $requiredRepo) -ne $uni_repo) {
+        error "Bucket '$name' must be added from '$requiredRepo' by managed catalog configuration."
+        return 3
+    }
     foreach ($bucket in Get-LocalBucket) {
         if (Test-Path -Path "$bucketsdir\$bucket\.git") {
             $remote = Invoke-Git -Path "$bucketsdir\$bucket" -ArgumentList @('config', '--get', 'remote.origin.url')
@@ -240,6 +335,7 @@ function add_bucket($name, $repo) {
         return 1
     }
     Write-Host 'OK.'
+    $bucketOriginCache.Remove($dir)
     if (get_config USE_SQLITE_CACHE) {
         info 'Updating cache...'
         Set-ScoopDB -Path (Get-ChildItem (Find-BucketDirectory $name) -Filter '*.json' -Recurse).FullName
@@ -262,6 +358,7 @@ function rm_bucket($name) {
     }
 
     Remove-Item $dir -Recurse -Force -ErrorAction Stop
+    $bucketOriginCache.Remove($dir)
     if (get_config USE_SQLITE_CACHE) {
         info 'Updating cache...'
         Remove-ScoopDBItem -Bucket $name

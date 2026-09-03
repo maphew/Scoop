@@ -128,11 +128,14 @@
 #       When set to arbitrary non-empty string, Scoop will use that string as the environment variable name instead.
 #       This is useful when you want to isolate Scoop from the system `PATH`.
 #
-# allowedBuckets: [string[]] or comma-separated string
+# allowedBuckets: [string[]], {name: repo} object, or comma-separated string of `name` or `name=repo`
 #       Restrict catalog operations and new installations to these bucket names.
+#       When a name is pinned to a repository, a local clone must have that origin and
+#       'scoop bucket add' refuses any other repository for that name.
 #       Standalone manifests from URLs, UNC paths, and local paths are disabled when this list is non-empty.
 #       Apps already installed from another source can still be listed, inspected, and uninstalled, but not updated.
-#       Combine with 'allowBucketChanges: false', otherwise an allowed name could be removed and re-added from another repository.
+#       The SQLite cache follows the allowlist: it is reconciled when this setting changes and on 'scoop update'.
+#       Combine with 'allowBucketChanges: false' to stop allowed buckets being removed.
 #
 # allowBucketChanges: $true|$false
 #       Allow buckets to be added or removed. Defaults to $true. Only a boolean true enables it.

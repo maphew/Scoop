@@ -58,7 +58,9 @@ function Test-ManagedManifestPath($Path) {
     } catch {
         return $false
     }
-    $trustedDirs = @(usermanifestsdir) + @(Get-AllowedBucket | ForEach-Object { Find-BucketDirectory $_ -Root })
+    $trustedDirs = @(usermanifestsdir) + @(
+        Get-AllowedBucket | Where-Object { Test-BucketAllowed $_ } | ForEach-Object { Find-BucketDirectory $_ -Root }
+    )
     foreach ($dir in $trustedDirs) {
         $prefix = [System.IO.Path]::GetFullPath($dir).TrimEnd('\') + '\'
         if ($fullPath.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {

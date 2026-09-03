@@ -4,6 +4,7 @@ BeforeAll {
     . "$PSScriptRoot\..\lib\buckets.ps1"
     . "$PSScriptRoot\..\lib\manifest.ps1"
     . "$PSScriptRoot\..\lib\versions.ps1"
+    . "$PSScriptRoot\..\lib\database.ps1"
 
     $scoopdir = Join-Path ([IO.Path]::GetTempPath()) "scoop-managed-$([Guid]::NewGuid())"
     $bucketsdir = Join-Path $scoopdir 'buckets'
@@ -20,6 +21,9 @@ BeforeAll {
         Set-Content (Join-Path $workspace 'qgis.json')
     '{ "version": "0.9", "url": "https://example.test/installed.zip", "hash": "installed" }' |
         Set-Content (Join-Path $installDir 'manifest.json')
+    # ENV is a real clone with a known origin so repository pinning can be exercised.
+    git -C $envBucket init -q
+    git -C $envBucket remote add origin https://example.test/it/scoop-env.git
 }
 
 AfterAll {
@@ -305,6 +309,77 @@ Describe 'Managed catalogs' -Tag 'Scoop' {
             $status.removed | Should -BeFalse
             $status.outdated | Should -BeTrue
             $status.latest_version | Should -Be '1.0'
+        }
+    }
+
+    Context 'repository pinning' {
+        BeforeEach {
+            $bucketOriginCache.Clear()
+        }
+
+        It 'parses name=repo pairs and JSON objects' {
+            $scoopConfig = [PSCustomObject]@{ allowedBuckets = 'ENV=https://example.test/it/scoop-env.git, public' }
+
+            @(Get-AllowedBucket) | Should -Be @('ENV', 'public')
+            Get-AllowedBucketRepo 'env' | Should -Be 'https://example.test/it/scoop-env.git'
+            Get-AllowedBucketRepo 'public' | Should -BeNullOrEmpty
+
+            $scoopConfig = [PSCustomObject]@{
+                allowedBuckets = [PSCustomObject]@{ ENV = 'https://example.test/it/scoop-env.git' }
+            }
+
+            @(Get-AllowedBucket) | Should -Be @('ENV')
+            Get-AllowedBucketRepo 'ENV' | Should -Be 'https://example.test/it/scoop-env.git'
+        }
+
+        It 'allows a pinned bucket whose clone has the expected origin' {
+            $scoopConfig = [PSCustomObject]@{ allowedBuckets = 'ENV=https://example.test/it/scoop-env' }
+
+            Test-BucketAllowed 'ENV' | Should -BeTrue
+            @(Get-LocalBucket) | Should -Be @('ENV')
+        }
+
+        It 'rejects a pinned bucket whose clone has a different origin' {
+            $scoopConfig = [PSCustomObject]@{ allowedBuckets = 'ENV=https://example.test/other/scoop-env' }
+
+            Test-BucketAllowed 'ENV' | Should -BeFalse
+            @(Get-LocalBucket) | Should -BeNullOrEmpty
+        }
+
+        It 'rejects a pinned bucket that is not a git repository' {
+            $scoopConfig = [PSCustomObject]@{ allowedBuckets = 'public=https://example.test/it/public' }
+
+            Test-BucketAllowed 'public' | Should -BeFalse
+        }
+
+        It 'refuses to add a pinned bucket from another repository' {
+            $scoopConfig = [PSCustomObject]@{ allowedBuckets = 'internal=https://example.test/it/internal' }
+            Mock Invoke-Git { throw 'git should not be invoked' }
+
+            add_bucket 'internal' 'https://example.test/attacker/internal.git' | Should -Be 3
+        }
+    }
+
+    Context 'sqlite cache' {
+        It 'drops rows for buckets outside the allowlist and indexes newly allowed buckets' {
+            $scoopConfig = [PSCustomObject]@{ allowedBuckets = @('ENV') }
+            Mock Get-ScoopDBBucket { @('public', 'extras') }
+            Mock Remove-ScoopDBItem { }
+            Mock Set-ScoopDB { }
+
+            Sync-ScoopDB | Should -BeTrue
+
+            Should -Invoke Remove-ScoopDBItem -Times 2 -Exactly
+            Should -Invoke Set-ScoopDB -Times 1 -Exactly -ParameterFilter { $Path -contains (Join-Path $envBucket 'qgis.json') }
+        }
+
+        It 'leaves the cache alone when it already matches the allowlist' {
+            $scoopConfig = [PSCustomObject]@{ allowedBuckets = @('ENV') }
+            Mock Get-ScoopDBBucket { @('ENV') }
+            Mock Remove-ScoopDBItem { throw 'should not run' }
+            Mock Set-ScoopDB { throw 'should not run' }
+
+            Sync-ScoopDB | Should -BeFalse
         }
     }
 }

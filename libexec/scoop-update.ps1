@@ -251,10 +251,14 @@ function Sync-Bucket {
             }
         }
     }
-    if ((get_config USE_SQLITE_CACHE) -and ($updatedFiles.Count -gt 0 -or $removedFiles.Count -gt 0)) {
-        info 'Updating cache...'
-        Set-ScoopDB -Path $updatedFiles
-        $removedFiles | Remove-ScoopDBItem
+    if (get_config USE_SQLITE_CACHE) {
+        if ($updatedFiles.Count -gt 0 -or $removedFiles.Count -gt 0) {
+            info 'Updating cache...'
+            Set-ScoopDB -Path $updatedFiles
+            $removedFiles | Remove-ScoopDBItem
+        }
+        # Pick up allowlist changes made outside `scoop config` (e.g. an admin-edited config.json).
+        Sync-ScoopDB | Out-Null
     }
 }
 
