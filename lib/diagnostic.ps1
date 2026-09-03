@@ -27,9 +27,12 @@ function check_windows_defender($global) {
 }
 
 function check_main_bucket {
-    if ((Get-LocalBucket) -notcontains 'main') {
-        warn 'Main bucket is not added.'
-        Write-Host "  run 'scoop bucket add main'"
+    $defaultBucket = get_config DEFAULTBUCKET 'main'
+    if ((Get-LocalBucket) -notcontains $defaultBucket) {
+        warn "Default bucket '$defaultBucket' is not added."
+        if (get_config ALLOWBUCKETCHANGES $true) {
+            Write-Host "  run 'scoop bucket add $defaultBucket <repo>'"
+        }
 
         return $false
     }

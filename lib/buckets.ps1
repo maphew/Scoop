@@ -49,6 +49,19 @@ function known_buckets {
     known_bucket_repos | ForEach-Object { $_.PSObject.Properties | Select-Object -Expand 'name' }
 }
 
+function Get-AllowedBucket {
+    <#
+    .SYNOPSIS
+        List buckets allowed by managed catalog configuration.
+    #>
+    @(get_config ALLOWEDBUCKETS) | Where-Object { ![String]::IsNullOrWhiteSpace($_) }
+}
+
+function Test-BucketAllowed($Name) {
+    $allowedBuckets = @(Get-AllowedBucket)
+    return !$allowedBuckets.Length -or $Name -in $allowedBuckets
+}
+
 function apps_in_bucket($dir) {
     return (Get-ChildItem $dir -Filter '*.json' -Recurse).BaseName
 }
@@ -58,7 +71,9 @@ function Get-LocalBucket {
     .SYNOPSIS
         List all local buckets.
     #>
-    $bucketNames = [System.Collections.Generic.List[String]](Get-ChildItem -Path $bucketsdir -Directory).Name
+    $bucketNames = [System.Collections.Generic.List[String]]@(
+        (Get-ChildItem -Path $bucketsdir -Directory).Name | Where-Object { Test-BucketAllowed $_ }
+    )
     if ($null -eq $bucketNames) {
         return @() # Return a zero-length list instead of $null.
     } else {
@@ -69,6 +84,12 @@ function Get-LocalBucket {
                 [void]$bucketNames.Remove($name)
                 $bucketNames.Insert(0, $name)
             }
+        }
+        $defaultBucket = get_config DEFAULTBUCKET
+        $defaultBucketName = $bucketNames | Where-Object { $_ -ieq $defaultBucket } | Select-Object -First 1
+        if ($defaultBucketName) {
+            [void]$bucketNames.Remove($defaultBucketName)
+            $bucketNames.Insert(0, $defaultBucketName)
         }
         return $bucketNames
     }
@@ -121,6 +142,14 @@ function list_buckets {
 }
 
 function add_bucket($name, $repo) {
+    if (!(get_config ALLOWBUCKETCHANGES $true)) {
+        error 'Bucket changes are disabled by managed catalog configuration.'
+        return 3
+    }
+    if (!(Test-BucketAllowed $name)) {
+        error "Bucket '$name' is not allowed by managed catalog configuration."
+        return 3
+    }
     if (!(Test-GitAvailable)) {
         error "Git is required for buckets. Run 'scoop install git' and try again."
         return 1
@@ -170,6 +199,14 @@ function add_bucket($name, $repo) {
 }
 
 function rm_bucket($name) {
+    if (!(get_config ALLOWBUCKETCHANGES $true)) {
+        error 'Bucket changes are disabled by managed catalog configuration.'
+        return 3
+    }
+    if (!(Test-BucketAllowed $name)) {
+        error "Bucket '$name' is not allowed by managed catalog configuration."
+        return 3
+    }
     $dir = Find-BucketDirectory $name -Root
     if (!(Test-Path $dir)) {
         error "'$name' bucket not found."

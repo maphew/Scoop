@@ -140,6 +140,23 @@ scoop bucket add extras
 
 You would be able to install apps from the `extras` bucket now.
 
+### Managed catalogs
+
+Scoop can restrict new installations to an approved set of buckets. Add the approved buckets first, then place these settings in Scoop's `config.json`:
+
+```json
+{
+    "allowedBuckets": ["ENV"],
+    "allowBucketChanges": false,
+    "allowPublicBucketDiscovery": false,
+    "defaultBucket": "ENV"
+}
+```
+
+With this configuration, Scoop ignores local buckets outside the allowlist, rejects explicit references to them, and rejects standalone manifests from URLs or paths. It also prevents bucket additions and removals, disables known-bucket listing and remote search, and resolves unqualified app names from `ENV` first.
+
+For administrator-managed installations, use the portable `config.json` in the Scoop root and deny users write access to it with Windows file permissions. The settings do not stop a user who can edit the configuration file or replace Scoop Core.
+
 ## Other application buckets
 
 Many other application buckets hosted on GitHub can be found on [ScoopSearch](https://scoop.sh/) or via [other search engines](https://rasa.github.io/scoop-directory/#other-search-engines).

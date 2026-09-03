@@ -133,7 +133,8 @@ function search_remote($bucket, $query) {
 
 function search_remotes($query) {
     $buckets = known_bucket_repos
-    $names = $buckets | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty name
+    $names = $buckets | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty name |
+        Where-Object { Test-BucketAllowed $_ }
 
     $results = $names | Where-Object { !(Test-Path $(Find-BucketDirectory $_)) } | ForEach-Object {
         @{ 'bucket' = $_; 'results' = (search_remote $_ $query) }
@@ -159,6 +160,7 @@ function search_remotes($query) {
 if (get_config USE_SQLITE_CACHE) {
     . "$PSScriptRoot\..\lib\database.ps1"
     Find-ScoopDBItem $query -From @('name', 'binary', 'shortcut') |
+        Where-Object { Test-BucketAllowed $_.bucket } |
         Select-Object -Property name, version, bucket, binary |
         ForEach-Object {
             $list.Add([PSCustomObject]@{
@@ -191,13 +193,16 @@ if ($list.Count -gt 0) {
     $list
 }
 
-if ($list.Count -eq 0 -and !(github_ratelimit_reached)) {
+if ($list.Count -eq 0 -and (get_config ALLOWPUBLICBUCKETDISCOVERY $true) -and !(github_ratelimit_reached)) {
     $remote_results = search_remotes $query
     if (!$remote_results) {
         warn 'No matches found.'
         exit 1
     }
     $remote_results
+} elseif ($list.Count -eq 0) {
+    warn 'No matches found.'
+    exit 1
 }
 
 exit 0

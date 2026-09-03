@@ -69,7 +69,11 @@ switch ($cmd) {
         }
     }
     'known' {
-        known_buckets
+        if (!(get_config ALLOWPUBLICBUCKETDISCOVERY $true)) {
+            warn 'Public bucket discovery is disabled by managed catalog configuration.'
+            exit 1
+        }
+        known_buckets | Where-Object { Test-BucketAllowed $_ }
         exit 0
     }
     default {

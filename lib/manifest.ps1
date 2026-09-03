@@ -38,7 +38,11 @@ function Get-Manifest($app) {
     if ($app -match '^(ht|f)tps?://|\\\\') {
         $url = $app
         $app = appname_from_url $url
-        $manifest = url_manifest $url
+        if (@(Get-AllowedBucket).Length) {
+            warn 'Standalone manifests are disabled by managed catalog configuration.'
+        } else {
+            $manifest = url_manifest $url
+        }
     } else {
         # Check if the manifest is already installed
         if (installed $app) {
@@ -54,29 +58,41 @@ function Get-Manifest($app) {
                 $bucket = $install_info.bucket
                 if (!$bucket) {
                     $url = $install_info.url
-                    if ($url -match '^(ht|f)tps?://|\\\\') {
-                        $manifest = url_manifest $url
-                    }
-                    if (!$manifest) {
-                        if (Test-Path $url) {
-                            $manifest = parse_json $url
-                        } else {
-                            # Fallback to installed manifest
-                            $manifest = installed_manifest $app $ver $global
+                    if (@(Get-AllowedBucket).Length) {
+                        warn 'Standalone manifests are disabled by managed catalog configuration.'
+                    } else {
+                        if ($url -match '^(ht|f)tps?://|\\\\') {
+                            $manifest = url_manifest $url
+                        }
+                        if (!$manifest) {
+                            if (Test-Path $url) {
+                                $manifest = parse_json $url
+                            } else {
+                                # Fallback to installed manifest
+                                $manifest = installed_manifest $app $ver $global
+                            }
                         }
                     }
                 } else {
-                    $manifest = manifest $app $bucket
-                    if (!$manifest) {
-                        $deprecated_dir = (Find-BucketDirectory -Name $bucket -Root) + '\deprecated'
-                        $manifest = parse_json (Get-ChildItem $deprecated_dir -Filter "$(sanitary_path $app).json" -Recurse -ErrorAction Ignore).FullName
+                    if (Test-BucketAllowed $bucket) {
+                        $manifest = manifest $app $bucket
+                        if (!$manifest) {
+                            $deprecated_dir = (Find-BucketDirectory -Name $bucket -Root) + '\deprecated'
+                            $manifest = parse_json (Get-ChildItem $deprecated_dir -Filter "$(sanitary_path $app).json" -Recurse -ErrorAction Ignore).FullName
+                        }
+                    } else {
+                        warn "Bucket '$bucket' is not allowed by managed catalog configuration."
                     }
                 }
             }
         } else {
             $app, $bucket, $version = parse_app $app
             if ($bucket) {
-                $manifest = manifest $app $bucket
+                if (Test-BucketAllowed $bucket) {
+                    $manifest = manifest $app $bucket
+                } else {
+                    warn "Bucket '$bucket' is not allowed by managed catalog configuration."
+                }
             } else {
                 $matched_buckets = @()
                 foreach ($tekcub in Get-LocalBucket) {
@@ -95,7 +111,11 @@ function Get-Manifest($app) {
                 if (Test-Path $app) {
                     $url = Convert-Path $app
                     $app = appname_from_url $url
-                    $manifest = parse_json $url
+                    if (@(Get-AllowedBucket).Length) {
+                        warn 'Standalone manifests are disabled by managed catalog configuration.'
+                    } else {
+                        $manifest = parse_json $url
+                    }
                 } else {
                     if (($app -match '\\/') -or $app.EndsWith('.json')) { $url = $app }
                     $app = appname_from_url $app
