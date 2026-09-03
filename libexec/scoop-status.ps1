@@ -59,7 +59,7 @@ $true, $false | ForEach-Object { # local and global apps
     Get-ChildItem $dir | Where-Object name -NE 'scoop' | ForEach-Object {
         $app = $_.name
         $status = app_status $app $global
-        if (!$status.outdated -and !$status.failed -and !$status.deprecated -and !$status.removed -and !$status.missing_deps) { return }
+        if (!$status.outdated -and !$status.failed -and !$status.deprecated -and !$status.removed -and !$status.blocked -and !$status.missing_deps) { return }
 
         $item = [ordered]@{}
         $item.Name = $app
@@ -71,6 +71,7 @@ $true, $false | ForEach-Object { # local and global apps
         if ($status.hold)       { $info += 'Held package' }
         if ($status.deprecated) { $info += 'Deprecated' }
         if ($status.removed)    { $info += 'Manifest removed' }
+        if ($status.blocked)    { $info += 'Source not allowed' }
         $item.Info = $info -join ', '
         $list += [PSCustomObject]$item
     }

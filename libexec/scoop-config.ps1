@@ -128,18 +128,20 @@
 #       When set to arbitrary non-empty string, Scoop will use that string as the environment variable name instead.
 #       This is useful when you want to isolate Scoop from the system `PATH`.
 #
-# allowedBuckets: [string[]]
-#       Restrict catalog operations and new installations to these buckets.
-#       Standalone manifests from URLs, UNC paths, and local paths are disabled when this list is set.
+# allowedBuckets: [string[]] or comma-separated string
+#       Restrict catalog operations and new installations to these bucket names.
+#       Standalone manifests from URLs, UNC paths, and local paths are disabled when this list is non-empty.
+#       Apps already installed from another source can still be listed, inspected, and uninstalled, but not updated.
+#       Combine with 'allowBucketChanges: false', otherwise an allowed name could be removed and re-added from another repository.
 #
 # allowBucketChanges: $true|$false
-#       Allow buckets to be added or removed. Defaults to $true.
+#       Allow buckets to be added or removed. Defaults to $true. Only a boolean true enables it.
 #
 # allowPublicBucketDiscovery: $true|$false
-#       Allow remote search and listing of Scoop's known public buckets. Defaults to $true.
+#       Allow remote search and listing of Scoop's known public buckets. Defaults to $true. Only a boolean true enables it.
 #
 # defaultBucket: [string]
-#       Search this bucket first for unqualified app names. Defaults to 'main'.
+#       Bucket searched first for unqualified app names, and assumed for installed apps that recorded no bucket. Defaults to 'main'.
 #
 # ARIA2 configuration
 # -------------------

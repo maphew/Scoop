@@ -27,11 +27,17 @@ function check_windows_defender($global) {
 }
 
 function check_main_bucket {
-    $defaultBucket = get_config DEFAULTBUCKET 'main'
+    $defaultBucket = Get-DefaultBucket
+    if (!(Test-BucketAllowed $defaultBucket)) {
+        warn "Default bucket '$defaultBucket' is not allowed by managed catalog configuration."
+        Write-Host "  set 'defaultBucket' to one of: $((Get-AllowedBucket) -join ', ')"
+
+        return $false
+    }
     if ((Get-LocalBucket) -notcontains $defaultBucket) {
         warn "Default bucket '$defaultBucket' is not added."
         if (Test-BucketChangeAllowed) {
-            Write-Host "  run 'scoop bucket add $defaultBucket <repo>'"
+            Write-Host "  run '$(Get-BucketAddHint $defaultBucket)'"
         }
 
         return $false

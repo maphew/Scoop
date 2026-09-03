@@ -132,9 +132,7 @@ function search_remote($bucket, $query) {
 }
 
 function search_remotes($query) {
-    $buckets = known_bucket_repos
-    $names = $buckets | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty name |
-        Where-Object { Test-BucketAllowed $_ }
+    $names = known_buckets | Where-Object { Test-BucketAllowed $_ }
 
     $results = $names | Where-Object { !(Test-Path $(Find-BucketDirectory $_)) } | ForEach-Object {
         @{ 'bucket' = $_; 'results' = (search_remote $_ $query) }
@@ -193,16 +191,19 @@ if ($list.Count -gt 0) {
     $list
 }
 
-if ($list.Count -eq 0 -and (Test-PublicBucketDiscoveryAllowed) -and !(github_ratelimit_reached)) {
-    $remote_results = search_remotes $query
-    if (!$remote_results) {
-        warn 'No matches found.'
+if ($list.Count -eq 0) {
+    if (!(Test-PublicBucketDiscoveryAllowed)) {
+        warn 'No matches found. Remote bucket search is disabled by managed catalog configuration.'
         exit 1
     }
-    $remote_results
-} elseif ($list.Count -eq 0) {
-    warn 'No matches found.'
-    exit 1
+    if (!(github_ratelimit_reached)) {
+        $remote_results = search_remotes $query
+        if (!$remote_results) {
+            warn 'No matches found.'
+            exit 1
+        }
+        $remote_results
+    }
 }
 
 exit 0

@@ -123,7 +123,8 @@ function set_config {
     # Initialize config's change
     Complete-ConfigChange -Name $name -Value $value
 
-    if ($null -eq $scoopConfig.$name) {
+    $previous = $scoopConfig.$name
+    if ($null -eq $previous) {
         $scoopConfig | Add-Member -MemberType NoteProperty -Name $name -Value $value
     } else {
         $scoopConfig.$name = $value
@@ -134,7 +135,20 @@ function set_config {
     }
 
     # Save config with UTF8NoBOM encoding
-    ConvertTo-Json $scoopConfig | Out-UTF8File -FilePath $configFile
+    try {
+        ConvertTo-Json $scoopConfig | Out-UTF8File -FilePath $configFile -ErrorAction Stop
+    } catch {
+        # Keep memory consistent with disk: a value that could not be saved must
+        # not change behaviour for the rest of this run (e.g. `scoop import`).
+        if ($null -eq $previous) {
+            $scoopConfig.PSObject.Properties.Remove($name)
+        } elseif ($null -eq $scoopConfig.$name) {
+            $scoopConfig | Add-Member -MemberType NoteProperty -Name $name -Value $previous
+        } else {
+            $scoopConfig.$name = $previous
+        }
+        error "Could not save '$name' to '$configFile': $($_.Exception.Message)"
+    }
     return $scoopConfig
 }
 
@@ -556,8 +570,11 @@ function app_status($app, $global) {
         $status.deprecated = (Get-ChildItem $deprecated_dir -Filter "$(sanitary_path $app).json" -Recurse).FullName
     }
 
-    $manifest = manifest $app $install_info.bucket $install_info.url
-    $status.removed = (!$manifest)
+    # An app whose source the managed catalog rejects cannot be updated, but its
+    # manifest has not been removed; report the two cases separately.
+    $status.blocked = !(Test-ManifestSourceAllowed -Bucket $install_info.bucket -Url $install_info.url)
+    $manifest = if ($status.blocked) { $null } else { manifest $app $install_info.bucket $install_info.url }
+    $status.removed = (!$status.blocked -and !$manifest)
     if ($manifest.version) {
         $status.latest_version = $manifest.version
     }

@@ -11,13 +11,13 @@ function Find-BucketDirectory {
         Root folder of bucket repository will be returned instead of 'bucket' subdirectory (if exists).
     #>
     param(
-        [string] $Name = 'main',
+        [string] $Name,
         [switch] $Root
     )
 
     # Handle info passing empty string as bucket ($install.bucket)
     if (($null -eq $Name) -or ($Name -eq '')) {
-        $Name = 'main'
+        $Name = Get-DefaultBucket
     }
     $bucket = "$bucketsdir\$Name"
 
@@ -53,8 +53,22 @@ function Get-AllowedBucket {
     <#
     .SYNOPSIS
         List buckets allowed by managed catalog configuration.
+    .DESCRIPTION
+        Accepts a JSON array of names or a comma-separated string (the only form
+        `scoop config` can write). Non-string values are ignored. Returns an empty
+        array when the setting is absent, which means no managed catalog is active.
     #>
-    @(get_config ALLOWEDBUCKETS) | Where-Object { ![String]::IsNullOrWhiteSpace($_) }
+    $configured = get_config ALLOWEDBUCKETS
+    if ($null -eq $configured) { return @() }
+    $names = foreach ($entry in @($configured)) {
+        if ($entry -is [string]) {
+            foreach ($name in $entry.Split(',')) {
+                $name = $name.Trim()
+                if ($name) { $name }
+            }
+        }
+    }
+    return @($names)
 }
 
 function Test-ManagedCatalogEnabled {
@@ -66,14 +80,35 @@ function Test-BucketAllowed($Name) {
     return !$allowedBuckets.Length -or $Name -in $allowedBuckets
 }
 
-function Test-BucketChangeAllowed {
-    $setting = get_config ALLOWBUCKETCHANGES $true
+function Get-DefaultBucket {
+    <#
+    .SYNOPSIS
+        Name of the bucket used when an app has no bucket qualifier. Defaults to 'main'.
+    #>
+    $name = get_config DEFAULTBUCKET
+    if ($name -is [string] -and ![String]::IsNullOrWhiteSpace($name)) { return $name.Trim() }
+    return 'main'
+}
+
+function Test-ManagedCatalogFlag($Key) {
+    # Fail closed: only a real boolean $true enables the behaviour, so a hand-edited
+    # config such as "allowBucketChanges": "true" does not silently unlock it.
+    $setting = get_config $Key $true
     return $setting -is [bool] -and $setting
 }
 
+function Test-BucketChangeAllowed {
+    return Test-ManagedCatalogFlag ALLOWBUCKETCHANGES
+}
+
 function Test-PublicBucketDiscoveryAllowed {
-    $setting = get_config ALLOWPUBLICBUCKETDISCOVERY $true
-    return $setting -is [bool] -and $setting
+    return Test-ManagedCatalogFlag ALLOWPUBLICBUCKETDISCOVERY
+}
+
+function Get-BucketAddHint($Name) {
+    # Known buckets need no repository argument.
+    if ($Name -in (known_buckets)) { return "scoop bucket add $Name" }
+    return "scoop bucket add $Name <repo>"
 }
 
 function apps_in_bucket($dir) {
@@ -85,28 +120,29 @@ function Get-LocalBucket {
     .SYNOPSIS
         List all local buckets.
     #>
+    $allowedBuckets = @(Get-AllowedBucket)
     $bucketNames = [System.Collections.Generic.List[String]]@(
-        (Get-ChildItem -Path $bucketsdir -Directory).Name | Where-Object { Test-BucketAllowed $_ }
+        (Get-ChildItem -Path $bucketsdir -Directory).Name |
+            Where-Object { $_ -and (!$allowedBuckets.Length -or $_ -in $allowedBuckets) }
     )
-    if ($null -eq $bucketNames) {
+    if ($bucketNames.Count -eq 0) {
         return @() # Return a zero-length list instead of $null.
-    } else {
-        $knownBuckets = known_buckets
-        for ($i = $knownBuckets.Count - 1; $i -ge 0 ; $i--) {
-            $name = $knownBuckets[$i]
-            if ($bucketNames.Contains($name)) {
-                [void]$bucketNames.Remove($name)
-                $bucketNames.Insert(0, $name)
-            }
-        }
-        $defaultBucket = get_config DEFAULTBUCKET
-        $defaultBucketName = $bucketNames | Where-Object { $_ -ieq $defaultBucket } | Select-Object -First 1
-        if ($defaultBucketName) {
-            [void]$bucketNames.Remove($defaultBucketName)
-            $bucketNames.Insert(0, $defaultBucketName)
-        }
-        return $bucketNames
     }
+    # Known buckets are listed first, and the default bucket before those.
+    # Walk the priority list backwards so the first entry ends up at the front.
+    $priority = @(Get-DefaultBucket) + @(known_buckets)
+    for ($i = $priority.Count - 1; $i -ge 0 ; $i--) {
+        $wanted = $priority[$i]
+        $name = $null
+        foreach ($candidate in $bucketNames) {
+            if ($candidate -ieq $wanted) { $name = $candidate; break }
+        }
+        if ($name) {
+            [void]$bucketNames.Remove($name)
+            $bucketNames.Insert(0, $name)
+        }
+    }
+    return $bucketNames
 }
 
 function buckets {
@@ -213,12 +249,10 @@ function add_bucket($name, $repo) {
 }
 
 function rm_bucket($name) {
+    # Removal is only gated by allowBucketChanges: deleting a bucket outside the
+    # allowlist moves the installation towards compliance, so it stays possible.
     if (!(Test-BucketChangeAllowed)) {
         error 'Bucket changes are disabled by managed catalog configuration.'
-        return 3
-    }
-    if (!(Test-BucketAllowed $name)) {
-        error "Bucket '$name' is not allowed by managed catalog configuration."
         return 3
     }
     $dir = Find-BucketDirectory $name -Root

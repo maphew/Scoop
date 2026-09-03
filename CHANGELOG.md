@@ -10,6 +10,7 @@
 - **download|scoop-config:** Allow disabling automatic fallback to the default downloader when Aria2c download fails ([#6538](https://github.com/ScoopInstaller/Scoop/issues/6538))
 - **checkver:** Set GitHub mode default jsonpath and regex ([#6653](https://github.com/ScoopInstaller/Scoop/issues/6653))
 - **download:** Enhance Get-GitHubToken to include more token sources ([#6712](https://github.com/ScoopInstaller/Scoop/issues/6712))
+- **buckets|config:** Add managed catalog controls to restrict installations to an allowlist of buckets ([#6729](https://github.com/ScoopInstaller/Scoop/issues/6729))
 
 ### Bug Fixes
 

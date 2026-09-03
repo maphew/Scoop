@@ -36,7 +36,9 @@ function Get-Dependency {
         $Unresolved += $AppName
 
         if (!$manifest) {
-            if (((Get-LocalBucket) -notcontains $bucket) -and $bucket) {
+            # Get-Manifest has already explained a bucket rejected by the managed catalog;
+            # only suggest adding a bucket when that would actually be permitted.
+            if ($bucket -and (Test-BucketAllowed $bucket) -and (Test-BucketChangeAllowed) -and ((Get-LocalBucket) -notcontains $bucket)) {
                 warn "Bucket '$bucket' not added. Add it with $(if($bucket -in (known_buckets)) { "'scoop bucket add $bucket' or " })'scoop bucket add $bucket <repo>'."
             }
             abort "Couldn't find manifest for '$AppName'$(if($bucket) { " from '$bucket' bucket" } elseif($url) { " at '$url'" })."

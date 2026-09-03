@@ -267,10 +267,14 @@ function update($app, $global, $quiet = $false, $independent, $suggested, $use_c
     $architecture = Format-ArchitectureString $install.architecture
     $bucket = $install.bucket
     if ($null -eq $bucket) {
-        $bucket = 'main'
+        $bucket = Get-DefaultBucket
     }
     $url = $install.url
 
+    if (!(Test-ManifestSourceAllowed -Bucket $bucket -Url $url)) {
+        error "'$app' cannot be updated: its source is not allowed by managed catalog configuration."
+        return
+    }
     $manifest = manifest $app $bucket $url
     $version = $manifest.version
     $is_nightly = $version -eq 'nightly'
@@ -437,7 +441,9 @@ if (-not ($apps -or $all)) {
                     warn "'$app' is held to version $($status.version)"
                 }
             } elseif ($apps_param -ne '*' -and !$all) {
-                if ($status.installed) {
+                if ($status.blocked) {
+                    warn "'$app' cannot be updated: its source is not allowed by managed catalog configuration."
+                } elseif ($status.installed) {
                     ensure_none_failed $app
                     Write-Host "$app`: $($status.version) (latest version)" -ForegroundColor Green
                 } else {

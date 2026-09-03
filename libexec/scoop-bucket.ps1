@@ -61,10 +61,10 @@ switch ($cmd) {
     'list' {
         $buckets = list_buckets
         if (!$buckets.Length) {
-            $defaultBucket = get_config DEFAULTBUCKET 'main'
+            $defaultBucket = Get-DefaultBucket
             warn 'No bucket found.'
             if (Test-BucketChangeAllowed) {
-                Write-Host "Please run 'scoop bucket add $defaultBucket <repo>' to add the default '$defaultBucket' bucket."
+                Write-Host "Please run '$(Get-BucketAddHint $defaultBucket)' to add the default '$defaultBucket' bucket."
             }
             exit 2
         } else {

@@ -153,9 +153,11 @@ Scoop can restrict new installations to an approved set of buckets. Add the appr
 }
 ```
 
-With this configuration, Scoop ignores local buckets outside the allowlist, rejects explicit references to them, and rejects standalone manifests from URLs or paths. It also prevents bucket additions and removals, disables known-bucket listing and remote search, and resolves unqualified app names from `ENV` first.
+With this configuration, Scoop ignores local buckets outside the allowlist, rejects explicit references to them, and rejects standalone manifests from URLs or paths. It also prevents bucket additions and removals, disables known-bucket listing and remote search, and resolves unqualified app names from `ENV` first. Apps installed before the policy from another source can still be listed, inspected, and uninstalled, but `scoop status` reports them as `Source not allowed` and they are not updated.
 
-For administrator-managed installations, use the portable `config.json` in the Scoop root and deny users write access to it with Windows file permissions. The settings do not stop a user who can edit the configuration file or replace Scoop Core.
+Set `allowedBuckets` from the command line as a comma-separated string, for example `scoop config allowedBuckets ENV,internal`. Keep `allowBucketChanges` off: the allowlist matches bucket names, so with changes permitted an allowed name could be removed and re-added from any repository.
+
+For administrator-managed installations, use the portable `config.json` in the Scoop root and deny users write access to it with Windows file permissions. The settings are a policy, not a security boundary. They do not stop a user who can edit the configuration file, replace the contents of the buckets directory, point the `SCOOP` environment variable at another root, or replace Scoop Core.
 
 ## Other application buckets
 

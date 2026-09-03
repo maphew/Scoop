@@ -32,19 +32,49 @@ function url_manifest($url) {
 }
 
 function Test-ManifestSourceAllowed($Bucket, $Url) {
+    <#
+    .SYNOPSIS
+        Decide whether a manifest source may be read under managed catalog configuration.
+    .DESCRIPTION
+        Pure predicate with no output; callers decide how to report a rejection
+        (see Write-ManifestSourceWarning). A URL or UNC path is never allowed. A local
+        path is allowed only when Scoop produced it: inside an allowed bucket, or in
+        the workspace where generated manifests are written.
+    #>
     if (!(Test-ManagedCatalogEnabled)) {
         return $true
     }
     if ($Url) {
+        if ($Url -match '^(ht|f)tps?://|\\\\') { return $false }
+        return Test-ManagedManifestPath $Url
+    }
+    $bucketName = if ($Bucket) { $Bucket } else { Get-DefaultBucket }
+    return Test-BucketAllowed $bucketName
+}
+
+function Test-ManagedManifestPath($Path) {
+    try {
+        $fullPath = [System.IO.Path]::GetFullPath($Path)
+    } catch {
+        return $false
+    }
+    $trustedDirs = @(usermanifestsdir) + @(Get-AllowedBucket | ForEach-Object { Find-BucketDirectory $_ -Root })
+    foreach ($dir in $trustedDirs) {
+        $prefix = [System.IO.Path]::GetFullPath($dir).TrimEnd('\') + '\'
+        if ($fullPath.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Write-ManifestSourceWarning($Bucket, $Url) {
+    if ($Url) {
         warn 'Standalone manifests are disabled by managed catalog configuration.'
-        return $false
-    }
-    $bucketName = if ($Bucket) { $Bucket } else { 'main' }
-    if (!(Test-BucketAllowed $bucketName)) {
+    } else {
+        $bucketName = if ($Bucket) { $Bucket } else { Get-DefaultBucket }
         warn "Bucket '$bucketName' is not allowed by managed catalog configuration."
-        return $false
     }
-    return $true
 }
 
 function Get-Manifest($app) {
@@ -56,6 +86,8 @@ function Get-Manifest($app) {
         $app = appname_from_url $url
         if (Test-ManifestSourceAllowed -Url $url) {
             $manifest = url_manifest $url
+        } else {
+            Write-ManifestSourceWarning -Url $url
         }
     } else {
         # Check if the manifest is already installed
@@ -70,30 +102,36 @@ function Get-Manifest($app) {
             if (Test-Path $install_info_path) {
                 $install_info = parse_json $install_info_path
                 $bucket = $install_info.bucket
+                # A source that the managed catalog rejects is not re-read, but the
+                # copy already installed is always available for inspection.
+                $sourceUrl = if ($bucket) { $null } else { $install_info.url }
+                $sourceAllowed = Test-ManifestSourceAllowed -Bucket $bucket -Url $sourceUrl
+                if (!$sourceAllowed) {
+                    Write-ManifestSourceWarning -Bucket $bucket -Url $sourceUrl
+                }
                 if (!$bucket) {
-                    $url = $install_info.url
-                    if (Test-ManifestSourceAllowed -Bucket $bucket -Url $url) {
+                    $url = $sourceUrl
+                    if ($sourceAllowed) {
                         if ($url -match '^(ht|f)tps?://|\\\\') {
                             $manifest = url_manifest $url
                         }
-                        if (!$manifest) {
-                            if (Test-Path $url) {
-                                $manifest = parse_json $url
-                            } else {
-                                # Fallback to installed manifest
-                                $manifest = installed_manifest $app $ver $global
-                            }
+                        if (!$manifest -and $url -and (Test-Path $url)) {
+                            $manifest = parse_json $url
                         }
                     }
+                    if (!$manifest) {
+                        # Fallback to installed manifest
+                        $manifest = installed_manifest $app $ver $global
+                    }
                 } else {
-                    if (Test-BucketAllowed $bucket) {
+                    if ($sourceAllowed) {
                         $manifest = manifest $app $bucket
                         if (!$manifest) {
                             $deprecated_dir = (Find-BucketDirectory -Name $bucket -Root) + '\deprecated'
                             $manifest = parse_json (Get-ChildItem $deprecated_dir -Filter "$(sanitary_path $app).json" -Recurse -ErrorAction Ignore).FullName
                         }
                     } else {
-                        warn "Bucket '$bucket' is not allowed by managed catalog configuration."
+                        $manifest = installed_manifest $app $ver $global
                     }
                 }
             }
@@ -103,7 +141,7 @@ function Get-Manifest($app) {
                 if (Test-BucketAllowed $bucket) {
                     $manifest = manifest $app $bucket
                 } else {
-                    warn "Bucket '$bucket' is not allowed by managed catalog configuration."
+                    Write-ManifestSourceWarning -Bucket $bucket
                 }
             } else {
                 $matched_buckets = @()
@@ -125,6 +163,8 @@ function Get-Manifest($app) {
                     $app = appname_from_url $url
                     if (Test-ManifestSourceAllowed -Url $url) {
                         $manifest = parse_json $url
+                    } else {
+                        Write-ManifestSourceWarning -Url $url
                     }
                 } else {
                     if (($app -match '\\/') -or $app.EndsWith('.json')) { $url = $app }
@@ -142,6 +182,8 @@ function Get-Manifest($app) {
 }
 
 function manifest($app, $bucket, $url) {
+    # Silently yields nothing for a source the managed catalog rejects; this runs
+    # once per installed app in status/update, so reporting belongs to the caller.
     if (!(Test-ManifestSourceAllowed -Bucket $bucket -Url $url)) { return $null }
     if ($url) { return url_manifest $url }
     parse_json (manifest_path $app $bucket)
@@ -332,6 +374,8 @@ function generate_user_manifest($app, $bucket, $version) {
     if ("$($manifest.version)" -eq "$version") {
         return manifest_path $app $bucket
     }
+    # Never read history or autoupdate for a bucket outside the managed catalog.
+    if (!(Test-ManifestSourceAllowed -Bucket $bucket)) { return $null }
 
     # Try historical providers via orchestrator
     info "Attempting to find historical manifest for '$app' ($version)"
