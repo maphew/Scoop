@@ -257,7 +257,9 @@ function Sync-Bucket {
             Set-ScoopDB -Path $updatedFiles
             $removedFiles | Remove-ScoopDBItem
         }
-        # Pick up allowlist changes made outside `scoop config` (e.g. an admin-edited config.json).
+        # The pull above may have changed the policy bucket's policy.json, and the
+        # allowlist may have been edited outside `scoop config`; re-read and reconcile.
+        $managedCatalogPolicyCache.Clear()
         Sync-ScoopDB | Out-Null
     }
 }

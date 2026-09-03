@@ -360,6 +360,98 @@ Describe 'Managed catalogs' -Tag 'Scoop' {
         }
     }
 
+    Context 'policy bucket' {
+        BeforeEach {
+            $managedCatalogPolicyCache.Clear()
+            $bucketOriginCache.Clear()
+            $policyPath = Join-Path $envBucket 'policy.json'
+        }
+
+        AfterEach {
+            Remove-Item $policyPath -ErrorAction Ignore
+        }
+
+        It 'changes nothing until policyBucket names the bucket' {
+            '{ "allowedBuckets": ["ENV"], "allowPublicBucketDiscovery": false }' | Set-Content $policyPath
+
+            Test-ManagedCatalogEnabled | Should -BeFalse
+            Test-PublicBucketDiscoveryAllowed | Should -BeTrue
+            @(Get-LocalBucket).Count | Should -Be 2
+        }
+
+        It 'applies the bucket policy over config.json and always allows the policy bucket' {
+            '{ "allowedBuckets": { "public": null }, "allowPublicBucketDiscovery": false, "defaultBucket": "public" }' |
+                Set-Content $policyPath
+            $scoopConfig = [PSCustomObject]@{
+                policyBucket               = 'ENV'
+                allowedBuckets             = @('extras')
+                allowPublicBucketDiscovery = $true
+            }
+
+            @(Get-AllowedBucket) | Should -Be @('ENV', 'public')
+            Test-BucketAllowed 'extras' | Should -BeFalse
+            Test-PublicBucketDiscoveryAllowed | Should -BeFalse
+            Get-DefaultBucket | Should -Be 'public'
+            @(Get-LocalBucket)[0] | Should -Be 'public'
+        }
+
+        It 'falls back to config.json for keys the policy omits' {
+            '{ "allowedBuckets": ["ENV"] }' | Set-Content $policyPath
+            $scoopConfig = [PSCustomObject]@{
+                policyBucket       = 'ENV'
+                defaultBucket      = 'public'
+                allowBucketChanges = $false
+            }
+
+            Get-DefaultBucket | Should -Be 'public'
+            Test-BucketChangeAllowed | Should -BeFalse
+        }
+
+        It 'pins the policy bucket to the repository named in its own policy' {
+            '{ "allowedBuckets": { "ENV": "https://example.test/it/scoop-env" } }' | Set-Content $policyPath
+            $scoopConfig = [PSCustomObject]@{ policyBucket = 'ENV' }
+
+            Test-BucketAllowed 'ENV' | Should -BeTrue
+
+            $managedCatalogPolicyCache.Clear()
+            '{ "allowedBuckets": { "ENV": "https://example.test/other/scoop-env" } }' | Set-Content $policyPath
+
+            Test-BucketAllowed 'ENV' | Should -BeFalse
+        }
+
+        It 'fails closed on non-boolean flags in the policy' {
+            '{ "allowBucketChanges": "true" }' | Set-Content $policyPath
+            $scoopConfig = [PSCustomObject]@{ policyBucket = 'ENV' }
+
+            Test-BucketChangeAllowed | Should -BeFalse
+        }
+
+        It 'fails closed when the policy bucket is missing but lets it be added' {
+            $scoopConfig = [PSCustomObject]@{ policyBucket = 'missing-policy' }
+            Mock Invoke-Git { throw 'reached git' }
+
+            Test-ManagedCatalogEnabled | Should -BeTrue
+            @(Get-AllowedBucket) | Should -Be @('missing-policy')
+            Test-BucketAllowed 'ENV' | Should -BeFalse
+            Test-PublicBucketDiscoveryAllowed | Should -BeFalse
+            Test-BucketChangeAllowed | Should -BeTrue
+            Get-DefaultBucket | Should -Be 'missing-policy'
+            @(Get-LocalBucket) | Should -BeNullOrEmpty
+
+            add_bucket 'public' 'https://example.test/it/public.git' | Should -Be 3
+            { add_bucket 'missing-policy' 'https://example.test/it/policy.git' } | Should -Throw 'reached git'
+        }
+
+        It 'fails closed when policy.json cannot be parsed' {
+            '{ not json' | Set-Content $policyPath
+            $scoopConfig = [PSCustomObject]@{ policyBucket = 'ENV' }
+
+            Test-BucketAllowed 'ENV' | Should -BeTrue
+            Test-BucketAllowed 'public' | Should -BeFalse
+            Test-PublicBucketDiscoveryAllowed | Should -BeFalse
+        }
+    }
+
     Context 'sqlite cache' {
         It 'drops rows for buckets outside the allowlist and indexes newly allowed buckets' {
             $scoopConfig = [PSCustomObject]@{ allowedBuckets = @('ENV') }

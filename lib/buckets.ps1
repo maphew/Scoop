@@ -1,5 +1,6 @@
 $bucketsdir = "$scoopdir\buckets"
 $bucketOriginCache = @{} # bucket root -> normalised remote.origin.url, filled by Get-BucketOrigin
+$managedCatalogPolicyCache = @{} # policy.json path -> parsed settings, filled by Get-ManagedCatalogPolicy
 
 function Find-BucketDirectory {
     <#
@@ -54,13 +55,33 @@ function known_buckets {
 # Managed catalogs (ScoopInstaller/Scoop#6729)
 #
 # Scope. The allowedBuckets, allowBucketChanges, allowPublicBucketDiscovery and
-# defaultBucket settings let an administrator restrict *new* installations to an
-# approved set of buckets. They are policy, not a security boundary: anything
-# Scoop reads from a user-writable directory (config.json, buckets\, workspace\)
-# can be forged by that user, and $env:SCOOP can point Scoop at another root.
+# defaultBucket settings restrict *new* installations to an approved set of
+# buckets. Scoop runs entirely in user space, so this is policy against
+# untrusted sources, not a boundary against the user: anything read from a
+# user-writable directory (config.json, buckets\, workspace\) can be edited by
+# that user, and $env:SCOOP can point Scoop at another root. That is the same
+# position manifests are already in, and it is accepted for the same reason: a
+# user editing their own clone only affects themselves. Organisations that need
+# a hard boundary get it from deployment (a global install under ProgramData
+# with ACLs, AppLocker/WDAC), and nothing here has to change for that.
+#
+# Where policy lives. The authoritative copy belongs in a bucket repository,
+# because push access to that repository is already administrator-controlled
+# and its history is the audit trail. The local config holds one root-of-trust
+# key, policyBucket, naming the local bucket whose policy.json supplies the four
+# settings above. Policy values override config.json; config.json remains the
+# fallback and the only source when no policy bucket is set. Every user picks
+# up a policy change on the next `scoop update`, with no per-machine edits.
 #
 # Decisions that shape the code below:
-# - Off by default. An absent or empty allowlist changes no behaviour.
+# - Off by default. No policy bucket and no allowlist changes no behaviour.
+# - Applying a policy is opt-in. A bucket that merely contains policy.json
+#   changes nothing until policyBucket names it; otherwise any public bucket
+#   could lock down or hijack a user's Scoop just by being added.
+# - The policy bucket is always allowed, so it can keep updating itself.
+# - Fail closed on a missing or unreadable policy: only the policy bucket is
+#   usable and discovery is off, but bucket changes stay allowed so the policy
+#   bucket itself can be (re)added. That is the bootstrap path on a new machine.
 # - Names are matched against bucket directory names. A name may be pinned to a
 #   repository ("ENV": "https://..." in JSON, or ENV=https://... on the CLI); a
 #   local clone must then have that origin and add_bucket refuses any other
@@ -75,15 +96,66 @@ function known_buckets {
 #   the allowlist can always be removed.
 # - The SQLite cache is reconciled with the allowlist by set_config and
 #   Sync-Bucket (see Sync-ScoopDB), because search and history read from it.
-#
-# To make this enforceable, policy and trusted content must both live where the
-# user cannot write. The winget-style shape would be:
-#   1. read these settings from HKLM\SOFTWARE\Policies\Scoop (Group Policy,
-#      administrators only) with precedence over config.json and $env:SCOOP;
-#   2. clone allowed buckets under the global directory (ProgramData\scoop),
-#      updated by an administrator task, with user `scoop update` skipping them.
-# Neither is implemented; both need maintainer agreement on the policy source.
+# - Machine-level policy sources (HKLM, Group Policy) were considered and
+#   rejected: they would make the feature depend on local administrator rights,
+#   which runs against Scoop's user-space design.
 # ---------------------------------------------------------------------------
+
+function Get-PolicyBucket {
+    <#
+    .SYNOPSIS
+        Name of the local bucket that supplies managed catalog policy, or $null.
+    #>
+    $name = get_config POLICYBUCKET
+    if ($name -is [string] -and ![String]::IsNullOrWhiteSpace($name)) { return $name.Trim() }
+    return $null
+}
+
+function Get-ManagedCatalogPolicy {
+    <#
+    .SYNOPSIS
+        Policy supplied by the policy bucket as @{ Bucket; Path; Settings }, or $null when none is configured.
+        Settings is $null when the bucket or its policy.json is missing or unreadable.
+    #>
+    $bucket = Get-PolicyBucket
+    if (!$bucket) { return $null }
+    $path = Join-Path "$bucketsdir\$bucket" 'policy.json'
+    if (!$managedCatalogPolicyCache.ContainsKey($path)) {
+        $settings = $null
+        if (Test-Path $path) {
+            try {
+                $settings = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+            } catch {
+                warn "Error parsing managed catalog policy at '$path'."
+            }
+        }
+        $managedCatalogPolicyCache[$path] = $settings
+    }
+    return @{ Bucket = $bucket; Path = $path; Settings = $managedCatalogPolicyCache[$path] }
+}
+
+function Get-ManagedCatalogSetting($Key) {
+    <#
+    .SYNOPSIS
+        Value of a managed catalog setting: the policy bucket's policy.json wins, config.json is the fallback.
+    #>
+    $policy = Get-ManagedCatalogPolicy
+    if ($policy) {
+        if ($null -eq $policy.Settings) {
+            # Fail closed, but keep the bootstrap path open: the policy bucket can be added.
+            switch ($Key) {
+                'ALLOWEDBUCKETS' { return @($policy.Bucket) }
+                'ALLOWBUCKETCHANGES' { return $true }
+                'ALLOWPUBLICBUCKETDISCOVERY' { return $false }
+                'DEFAULTBUCKET' { return $policy.Bucket }
+            }
+        } else {
+            $value = $policy.Settings.$Key
+            if ($null -ne $value) { return $value }
+        }
+    }
+    return get_config $Key
+}
 
 function Get-AllowedBucketEntry {
     <#
@@ -95,8 +167,7 @@ function Get-AllowedBucketEntry {
         `scoop config` can write). Non-string values are ignored. Returns an empty
         array when the setting is absent, which means no managed catalog is active.
     #>
-    $configured = get_config ALLOWEDBUCKETS
-    if ($null -eq $configured) { return @() }
+    $configured = Get-ManagedCatalogSetting ALLOWEDBUCKETS
     $entries = [System.Collections.Generic.List[hashtable]]::new()
     if ($configured -is [System.Management.Automation.PSCustomObject]) {
         foreach ($property in $configured.PSObject.Properties) {
@@ -104,16 +175,21 @@ function Get-AllowedBucketEntry {
             $repo = if ($property.Value -is [string]) { $property.Value.Trim() }
             if ($name) { $entries.Add(@{ Name = $name; Repo = $repo }) }
         }
-        return @($entries)
-    }
-    foreach ($value in @($configured)) {
-        if ($value -isnot [string]) { continue }
-        foreach ($item in $value.Split(',')) {
-            $name, $repo = $item.Split('=', 2)
-            $name = $name.Trim()
-            $repo = if ($repo) { $repo.Trim() }
-            if ($name) { $entries.Add(@{ Name = $name; Repo = $repo }) }
+    } else {
+        foreach ($value in @($configured)) {
+            if ($value -isnot [string]) { continue }
+            foreach ($item in $value.Split(',')) {
+                $name, $repo = $item.Split('=', 2)
+                $name = $name.Trim()
+                $repo = if ($repo) { $repo.Trim() }
+                if ($name) { $entries.Add(@{ Name = $name; Repo = $repo }) }
+            }
         }
+    }
+    # The policy bucket is trusted by definition and must stay usable so it can update itself.
+    $policyBucket = Get-PolicyBucket
+    if ($policyBucket -and !($entries | Where-Object { $_.Name -ieq $policyBucket })) {
+        $entries.Insert(0, @{ Name = $policyBucket; Repo = $null })
     }
     return @($entries)
 }
@@ -175,15 +251,16 @@ function Get-DefaultBucket {
     .SYNOPSIS
         Name of the bucket used when an app has no bucket qualifier. Defaults to 'main'.
     #>
-    $name = get_config DEFAULTBUCKET
+    $name = Get-ManagedCatalogSetting DEFAULTBUCKET
     if ($name -is [string] -and ![String]::IsNullOrWhiteSpace($name)) { return $name.Trim() }
     return 'main'
 }
 
 function Test-ManagedCatalogFlag($Key) {
     # Fail closed: only a real boolean $true enables the behaviour, so a hand-edited
-    # config such as "allowBucketChanges": "true" does not silently unlock it.
-    $setting = get_config $Key $true
+    # value such as "allowBucketChanges": "true" does not silently unlock it.
+    $setting = Get-ManagedCatalogSetting $Key
+    if ($null -eq $setting) { return $true }
     return $setting -is [bool] -and $setting
 }
 
@@ -336,6 +413,7 @@ function add_bucket($name, $repo) {
     }
     Write-Host 'OK.'
     $bucketOriginCache.Remove($dir)
+    $managedCatalogPolicyCache.Clear()
     if (get_config USE_SQLITE_CACHE) {
         info 'Updating cache...'
         Set-ScoopDB -Path (Get-ChildItem (Find-BucketDirectory $name) -Filter '*.json' -Recurse).FullName
@@ -359,6 +437,7 @@ function rm_bucket($name) {
 
     Remove-Item $dir -Recurse -Force -ErrorAction Stop
     $bucketOriginCache.Remove($dir)
+    $managedCatalogPolicyCache.Clear()
     if (get_config USE_SQLITE_CACHE) {
         info 'Updating cache...'
         Remove-ScoopDBItem -Bucket $name

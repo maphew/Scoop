@@ -137,7 +137,7 @@ function set_config {
     # Save config with UTF8NoBOM encoding
     try {
         ConvertTo-Json $scoopConfig | Out-UTF8File -FilePath $configFile -ErrorAction Stop
-        if ($name -eq 'allowedbuckets' -and (get_config USE_SQLITE_CACHE)) {
+        if ($name -in @('allowedbuckets', 'policybucket') -and (get_config USE_SQLITE_CACHE)) {
             # Search and history read from the cache, so it must follow the allowlist.
             . "$PSScriptRoot\..\lib\database.ps1"
             . "$PSScriptRoot\..\lib\manifest.ps1"

@@ -142,28 +142,31 @@ You would be able to install apps from the `extras` bucket now.
 
 ### Managed catalogs
 
-Scoop can restrict new installations to an approved set of buckets. Add the approved buckets first, then place these settings in Scoop's `config.json`:
+Scoop can restrict new installations to an approved set of buckets. The policy lives in a bucket repository, so the people who control what goes into the catalog also control the policy, and every user picks up changes with `scoop update`. Put a `policy.json` at the root of the bucket:
 
 ```json
 {
-    "allowedBuckets": ["ENV"],
+    "allowedBuckets": { "ENV": "https://git.example.com/it/scoop-env" },
     "allowBucketChanges": false,
     "allowPublicBucketDiscovery": false,
     "defaultBucket": "ENV"
 }
 ```
 
-With this configuration, Scoop ignores local buckets outside the allowlist, rejects explicit references to them, and rejects standalone manifests from URLs or paths. It also prevents bucket additions and removals, disables known-bucket listing and remote search, and resolves unqualified app names from `ENV` first. Apps installed before the policy from another source can still be listed, inspected, and uninstalled, but `scoop status` reports them as `Source not allowed` and they are not updated.
+Then, on each machine, add the bucket and name it as the policy source:
 
-Set `allowedBuckets` from the command line as a comma-separated string, for example `scoop config allowedBuckets ENV,internal`. To pin a name to a repository, give the allowlist as an object, or use `name=repo` on the command line:
-
-```json
-"allowedBuckets": { "ENV": "https://git.example.com/it/scoop-env" }
+```powershell
+scoop bucket add ENV https://git.example.com/it/scoop-env
+scoop config policyBucket ENV
 ```
 
-A pinned bucket is only used when its local clone has that origin, and `scoop bucket add ENV` refuses any other repository. If the SQLite cache is enabled, it is reconciled with the allowlist whenever the setting changes and on every `scoop update`.
+With this policy, Scoop ignores local buckets outside the allowlist, rejects explicit references to them, and rejects standalone manifests from URLs or paths. It also prevents bucket additions and removals, disables known-bucket listing and remote search, and resolves unqualified app names from `ENV` first. Apps installed before the policy from another source can still be listed, inspected, and uninstalled, but `scoop status` reports them as `Source not allowed` and they are not updated.
 
-For administrator-managed installations, use the portable `config.json` in the Scoop root and deny users write access to it with Windows file permissions. The settings are a policy, not a security boundary. They do not stop a user who can edit the configuration file, replace the contents of the buckets directory, point the `SCOOP` environment variable at another root, or replace Scoop Core. The design notes at the top of the managed catalog section in `lib/buckets.ps1` describe the decisions taken and the shape a policy-backed, enforceable version would need.
+A bucket that contains `policy.json` changes nothing until `policyBucket` names it. The policy bucket is always allowed. If it is missing or its `policy.json` cannot be read, Scoop fails closed: only the policy bucket can be used or added, and public discovery is off, which is also the bootstrap path on a new machine.
+
+The same four settings can be placed directly in `config.json` instead, and are used as the fallback for any key the policy omits. `allowedBuckets` accepts a list of names, an object pinning each name to a repository, or on the command line a comma-separated string such as `ENV,internal` or `ENV=https://git.example.com/it/scoop-env`. A pinned bucket is only used when its local clone has that origin, and `scoop bucket add` refuses any other repository for that name. If the SQLite cache is enabled, it is reconciled with the allowlist whenever the policy or the setting changes and on every `scoop update`.
+
+Scoop runs in user space, so these settings are a policy against untrusted sources, not a security boundary against the user. They do not stop a user who edits the configuration file or their local bucket clone, points the `SCOOP` environment variable at another root, or replaces Scoop Core. Deployments that need a hard boundary get it from a global install with file permissions and application control. The design notes at the top of the managed catalog section in `lib/buckets.ps1` record the decisions and their reasons.
 
 ## Other application buckets
 

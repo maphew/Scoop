@@ -128,6 +128,12 @@
 #       When set to arbitrary non-empty string, Scoop will use that string as the environment variable name instead.
 #       This is useful when you want to isolate Scoop from the system `PATH`.
 #
+# policyBucket: [string]
+#       Name of a local bucket whose 'policy.json' supplies the managed catalog settings below.
+#       Values in that file override config.json; keys it omits fall back to config.json.
+#       The policy bucket is always allowed. If the bucket or its policy.json is missing, Scoop fails
+#       closed: only the policy bucket can be used or added, and public discovery is off.
+#
 # allowedBuckets: [string[]], {name: repo} object, or comma-separated string of `name` or `name=repo`
 #       Restrict catalog operations and new installations to these bucket names.
 #       When a name is pinned to a repository, a local clone must have that origin and
